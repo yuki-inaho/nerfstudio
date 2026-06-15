@@ -240,3 +240,27 @@ recorded_at: 2026-06-15T06:46:43Z
 ### Decisions
 - Treat 20k as the better metric checkpoint for eval quality unless another view-based/manual inspection prefers 30k; the exported SPZ was produced from the requested 30k checkpoint.
 - Commit the reusable export/conversion scripts, onboarding template, and worklog update. Do not commit generated PLY/SPZ/model/log artifacts.
+
+## 2026-06-15 SPZ Validation
+
+recorded_at: 2026-06-15T07:00:43Z
+
+### Findings
+- Validated `/home/kasm-user/Desktop/splat_30k_sh.spz`, the Desktop copy of the exported 30k SPZ.
+- Desktop copy matches the original export byte-for-byte and has SHA256 `ac94607ab45a32984006715be5732e6b65cb0cc0c8db56e2e900e2966e37e818`.
+- Binary header check: magic `NGSP`, version `4`, `779910` points, SH degree `3`, `6` streams, byte length `18714025`.
+- PlayCanvas `splat-transform 2.5.2` readback succeeded with `1` table, `779910` rows, `59` columns, and `45` `f_rest_*` columns.
+- PLY vertex count and SPZ row count both equal `779910`.
+- Required Gaussian columns are present. Non-opacity columns are finite. Rotation norms are effectively normalized: min `0.9999999408639373`, max `1.000000063162991`.
+- Opacity readback has `504` `+Infinity` logit values and no NaNs. This corresponds to alpha saturation at `1.0`; alpha-space validation is valid with range `0.003921569806015153` to `1.0` and `0` invalid alpha values.
+- Final validation result: `VALIDATION_PASSED`.
+
+### Commands / evidence
+- Header check: `xxd -g 1 -l 128 /home/kasm-user/Desktop/splat_30k_sh.spz`.
+- SHA256 check: `sha256sum /home/kasm-user/Desktop/splat_30k_sh.spz /home/kasm-user/Desktop/nerfstudio_exports/TVA_NYX650_2026_06_04_gluemap_aba_mcmc_30k_resume20k_20260615T062336Z/splat_30k_sh.spz`.
+- Strict finite attempt log: `/home/kasm-user/Desktop/nerfstudio_task_logs/spz_validation_30k_sh_20260615T065512Z.log`.
+- Final validation log: `/home/kasm-user/Desktop/nerfstudio_task_logs/spz_validation_30k_sh_20260615T065512Z_pass.log`.
+
+### Decisions
+- Accept the SPZ as valid. The opacity `+Infinity` values are a logit representation of alpha `1.0`, not file corruption.
+- Commit only the validation record in this worklog; keep generated SPZ/PLY/log artifacts outside git.
