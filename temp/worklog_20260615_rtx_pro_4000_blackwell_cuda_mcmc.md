@@ -194,3 +194,49 @@ recorded_at: 2026-06-15T06:10:07Z
 ### Decisions
 - Do not commit the model checkpoint, outputs, or raw logs; they are large runtime artifacts and are referenced from the tracked worklog.
 - Commit and push this worklog update on the existing Blackwell-specific branch after the 20k training and eval evidence are recorded.
+
+## 2026-06-15 30k Resume Training, SPZ Export, And Onboarding Template
+
+recorded_at: 2026-06-15T06:46:43Z
+
+### Struggles
+- Resuming from the 20k checkpoint worked, but the saved resume `config.yml` retained `load_step: 19999`. `ns-eval` then tried to load `step-000019999.ckpt` from the 30k run directory and failed because the actual final checkpoint was `step-000029999.ckpt`.
+- `pixi run ns-export --help` failed before showing CLI help because `open3d` imported `pyarrow`, which selected the system `libstdc++.so.6` and missed `GLIBCXX_3.4.29`.
+- Prepending `.pixi/envs/default/lib` fixed the `libstdc++` issue but exposed the known PyMeshLab import error: `libmeshlab-common.so: undefined symbol: _ZdlPvm, version Qt_5`.
+- The installed PlayCanvas `splat-transform` CLI failed on this glibc 2.31 host because its native `webgpu` module requires newer runtime symbols. The library API could still be imported directly without the CLI path.
+
+### Findings
+- 30k resume training completed from `step-000019999.ckpt` to `step-000029999.ckpt`.
+- Final 30k checkpoint: `/home/kasm-user/Desktop/nerfstudio_outputs/TVA_NYX650_2026_06_04_gluemap_aba_mcmc_30k_resume20k/splatfacto/20260615T062336Z/nerfstudio_models/step-000029999.ckpt`.
+- 30k eval metrics: PSNR `21.961544036865234`, SSIM `0.7341619729995728`, LPIPS `0.22755087912082672`, throughput `23191476.0` rays/sec, FPS `48.315574645996094`.
+- 20k eval was slightly better than 30k on the held-out eval set: PSNR `21.971933364868164`, SSIM `0.7347635626792908`, LPIPS `0.22709527611732483`. Additional 20k to 30k training did not improve this eval split.
+- Related export failure references were checked: `https://github.com/nerfstudio-project/nerfstudio/issues/3633`, `https://github.com/nerfstudio-project/nerfstudio/issues/2532`, `https://github.com/cnr-isti-vclab/PyMeshLab/issues/341`, and `https://github.com/cnr-isti-vclab/PyMeshLab/issues/398` around `ns-export`, PyMeshLab import, and Qt symbol failures.
+- Added `scripts/export_gaussian_splat_ply.py` to export Splatfacto Gaussian PLY directly through `eval_setup(test_mode="inference")`, avoiding mesh exporter imports and PyMeshLab.
+- Added `scripts/convert_splat_to_spz.mjs` to use `@playcanvas/splat-transform` library APIs directly, avoiding the CLI's native `webgpu` import path.
+- Added `docs/onboarding_template.md` from the requested onboarding Markdown template.
+- PLY export wrote `779910` Gaussians after filtering `220090` low-opacity Gaussians and `0` NaN/Inf Gaussians.
+- SPZ v4 readback succeeded with PlayCanvas `splat-transform 2.5.2`: `1` table, `779910` rows, `18714025` bytes.
+
+### Tips
+- For resumed training configs, either evaluate with a temporary config where `load_step: null`, or use an eval helper that overrides `config.load_step`; otherwise `ns-eval` can target the old resume source step.
+- Prefer the dedicated Gaussian export script for this branch when exporting Splatfacto outputs; it avoids `ns-export` import-time failures from mesh-only dependencies.
+- On this host, do not rely on the `splat-transform` CLI. Use `node scripts/convert_splat_to_spz.mjs`, which imports `@playcanvas/splat-transform/dist/index.mjs` and uses `readFile`/`writeFile` directly.
+- Keep generated PLY/SPZ outputs outside the git repo. Commit scripts and worklogs only.
+- The timed export logs are now useful for future estimates: PLY export was `5.45s`, SPZ conversion was `8.20s` for a `184.5 MB` PLY.
+
+### Commands / evidence
+- Training command resumed from 20k: `pixi run ns-train splatfacto --output-dir /home/kasm-user/Desktop/nerfstudio_outputs --experiment-name TVA_NYX650_2026_06_04_gluemap_aba_mcmc_30k_resume20k --timestamp 20260615T062336Z --vis tensorboard --max-num-iterations 30000 --steps-per-save 5000 --steps-per-eval-image 5000 --steps-per-eval-all-images 10000 --load-dir /home/kasm-user/Desktop/nerfstudio_outputs/TVA_NYX650_2026_06_04_gluemap_aba_mcmc_20k/splatfacto/20260615T055229Z/nerfstudio_models --load-step 19999 --pipeline.datamanager.cache-images cpu --pipeline.model.strategy mcmc --data /home/kasm-user/Desktop/nerfstudio_processed/TVA_NYX650_2026_06_04_gluemap_aba_straight`.
+- 30k training log: `/home/kasm-user/Desktop/nerfstudio_task_logs/ns_train_splatfacto_mcmc_30k_resume20k_cuda128_20260615T062336Z.log`.
+- 30k eval JSON: `/home/kasm-user/Desktop/nerfstudio_task_logs/ns_eval_splatfacto_mcmc_30k_resume20k_cuda128_20260615T062336Z.json`.
+- Temporary eval config with `load_step: null`: `/home/kasm-user/Desktop/nerfstudio_task_logs/config_eval_splatfacto_mcmc_30k_resume20k_cuda128_20260615T062336Z.yml`.
+- Timed PLY export log: `/home/kasm-user/Desktop/nerfstudio_task_logs/ns_export_gaussian_splat_ply_30k_resume20k_timed_20260615T062336Z.log`.
+- Timed SPZ conversion log: `/home/kasm-user/Desktop/nerfstudio_task_logs/splat_transform_spz_30k_resume20k_timed_20260615T062336Z.log`.
+- SPZ readback log: `/home/kasm-user/Desktop/nerfstudio_task_logs/spz_readback_30k_resume20k_20260615T062336Z.log`.
+- PLY output: `/home/kasm-user/Desktop/nerfstudio_exports/TVA_NYX650_2026_06_04_gluemap_aba_mcmc_30k_resume20k_20260615T062336Z/splat_30k_sh.ply`, size `193419274` bytes.
+- SPZ output: `/home/kasm-user/Desktop/nerfstudio_exports/TVA_NYX650_2026_06_04_gluemap_aba_mcmc_30k_resume20k_20260615T062336Z/splat_30k_sh.spz`, size `18714025` bytes.
+- Desktop copy for user access: `/home/kasm-user/Desktop/splat_30k_sh.spz`.
+- SPZ copy checksum matched original: `ac94607ab45a32984006715be5732e6b65cb0cc0c8db56e2e900e2966e37e818`.
+
+### Decisions
+- Treat 20k as the better metric checkpoint for eval quality unless another view-based/manual inspection prefers 30k; the exported SPZ was produced from the requested 30k checkpoint.
+- Commit the reusable export/conversion scripts, onboarding template, and worklog update. Do not commit generated PLY/SPZ/model/log artifacts.
