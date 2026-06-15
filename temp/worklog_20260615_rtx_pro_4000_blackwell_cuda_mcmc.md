@@ -38,3 +38,33 @@
 - PR 3711 was partially overlapping with PR 3653; the duplicate `eval_utils.py` change was already covered, and the unique `splatfacto.get_viewmat` `@torch_compile()` removal was applied.
 - Worklog is placed under `temp/` to match the user request. `.gitignore` ignores `temp/*` but explicitly allows `temp/worklog_*.md` so only the worklog is committed.
 recorded_at: Mon Jun 15 03:43:03 UTC 2026
+
+## 2026-06-15 cu128 Torch Environment Repair
+
+### Struggles
+- Installing `torch==2.8.0+cu128` and `torchvision==0.23.0+cu128` via pip initially upgraded numpy to `2.2.6`, breaking `pyarrow 15.0.2` and `ns-train` imports with numpy ABI errors.
+- Existing `tinycudann` was built against torch 2.2/CUDA 11.8 and failed under torch 2.8 with an undefined symbol.
+- Rebuilding `tinycudann` with `TCNN_CUDA_ARCHITECTURES=90` failed because PyTorch was compiled with CUDA 12.8 while available `nvcc` is CUDA 11.8.
+
+### Findings
+- After repair, environment check passed with `torch 2.8.0+cu128`, torch runtime CUDA `12.8`, CUDA available true, GPU `NVIDIA RTX PRO 4000 Blackwell`, capability `(12, 0)`.
+- CUDA tensor matmul succeeded under torch 2.8.0+cu128.
+- `numpy==1.26.4` and `tzdata` restored dependency consistency; `pip check` reports no broken requirements.
+- `ns-train splatfacto --help` succeeds.
+- `tinycudann` is intentionally unavailable after uninstall; this is acceptable for the assigned `splatfacto`/mcmc path but not for nerfacto/tcnn-dependent paths.
+
+### Tips
+- Do not rerun plain `pixi run post-install` without reapplying the cu128 pip overlay; pixi manifest still declares conda torch 2.2/CUDA 11.8.
+- If tiny-cuda-nn is needed later, install a CUDA 12.8 toolkit/nvcc in the pixi environment first, then rebuild it against torch 2.8.
+
+### Commands / evidence
+- `pixi run python -m pip install --upgrade --force-reinstall torch==2.8.0+cu128 torchvision==0.23.0+cu128 --index-url https://download.pytorch.org/whl/cu128`
+- `pixi run python -m pip install --force-reinstall numpy==1.26.4 tzdata`
+- `TCNN_CUDA_ARCHITECTURES=90 pixi run python -m pip install --force-reinstall --no-cache-dir --no-build-isolation ninja git+https://github.com/NVlabs/tiny-cuda-nn/#subdirectory=bindings/torch` failed with CUDA mismatch: detected 11.8 vs torch 12.8.
+- `pixi run python -m pip uninstall -y tinycudann`
+- `pixi run python -m pip check` -> no broken requirements.
+- Logs: `/home/kasm-user/Desktop/nerfstudio_task_logs/pip_torch_cu128_20260615T0340Z.log`, `/home/kasm-user/Desktop/nerfstudio_task_logs/pip_fix_numpy_tzdata_20260615T0344Z.log`, `/home/kasm-user/Desktop/nerfstudio_task_logs/pip_rebuild_tinycudann_torch28_20260615T0345Z.log`, `/home/kasm-user/Desktop/nerfstudio_task_logs/pip_uninstall_tinycudann_20260615T0346Z.log`.
+
+### Decisions
+- Continue reconstruction with `splatfacto --pipeline.model.strategy mcmc`, because this path imports and its CLI works without tiny-cuda-nn.
+- Leave pixi manifest/lock uncommitted for now; the working environment is a pip overlay on top of pixi, and a cleaner manifest-level CUDA 12.8 conversion would be a separate dependency migration.
