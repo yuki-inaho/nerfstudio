@@ -161,3 +161,36 @@ recorded_at: 2026-06-15T05:40:02Z
 ### Decisions
 - Keep `gsplat==1.4.0` as declared by the repo instead of upgrading to an unconstrained newer package that changes torch/CUDA/numpy dependency surfaces.
 - Commit the pixi manifest, lockfile, activation script, and worklog together as the reproducible pixi build fix for this GPU/CUDA branch.
+
+## 2026-06-15 20k MCMC Training And Quality Eval
+
+recorded_at: 2026-06-15T06:10:07Z
+
+### Struggles
+- The first full-quality request needed a new push decision because the earlier instruction prohibited push, while the later instruction explicitly asked for commit and push on the Blackwell branch.
+- `ns-eval` output capture used the pixi Python environment for JSON formatting because the base shell did not have a `python` command on PATH.
+- The pixi manifest still emits a deprecation warning for `[project]`; this is non-blocking for install, train, and eval.
+
+### Findings
+- Active branch is `work/rtx-pro-4000-blackwell-driver-cuda-13-0-nvcc-11-8-mcmc-recon`, tracking `origin/work/rtx-pro-4000-blackwell-driver-cuda-13-0-nvcc-11-8-mcmc-recon`.
+- 20k `splatfacto` MCMC training completed successfully on `/home/kasm-user/Desktop/nerfstudio_processed/TVA_NYX650_2026_06_04_gluemap_aba_straight`.
+- Final checkpoint is `/home/kasm-user/Desktop/nerfstudio_outputs/TVA_NYX650_2026_06_04_gluemap_aba_mcmc_20k/splatfacto/20260615T055229Z/nerfstudio_models/step-000019999.ckpt`.
+- `ns-eval` loaded the final checkpoint and saved quality metrics to `/home/kasm-user/Desktop/nerfstudio_task_logs/ns_eval_splatfacto_mcmc_20k_cuda128_20260615T055229Z.json`.
+- Eval metrics: PSNR `21.971933364868164`, PSNR std `0.837710440158844`, SSIM `0.7347635626792908`, SSIM std `0.04798934608697891`, LPIPS `0.22709527611732483`, LPIPS std `0.03481098264455795`, throughput `23850562.0` rays/sec, FPS `49.68867111206055`.
+
+### Tips
+- Use the saved `config.yml` for evaluation instead of manually selecting checkpoints; `ns-eval` loads the latest checkpoint from the run directory.
+- Keep logs outside the repo tree under `/home/kasm-user/Desktop/nerfstudio_task_logs`; only the worklog under `temp/worklog_*.md` is intentionally tracked.
+- For comparable metrics, keep the same processed straight-trajectory dataset and the same `splatfacto --pipeline.model.strategy mcmc` configuration.
+
+### Commands / evidence
+- Training command: `pixi run ns-train splatfacto --output-dir /home/kasm-user/Desktop/nerfstudio_outputs --experiment-name TVA_NYX650_2026_06_04_gluemap_aba_mcmc_20k --timestamp 20260615T055229Z --vis tensorboard --max-num-iterations 20000 --steps-per-save 5000 --steps-per-eval-image 5000 --steps-per-eval-all-images 10000 --pipeline.datamanager.cache-images cpu --pipeline.model.strategy mcmc --data /home/kasm-user/Desktop/nerfstudio_processed/TVA_NYX650_2026_06_04_gluemap_aba_straight`
+- Training log: `/home/kasm-user/Desktop/nerfstudio_task_logs/ns_train_splatfacto_mcmc_20k_cuda128_20260615T055229Z.log`.
+- Training reached `19999 (100.00%)` and printed `Training Finished`.
+- Eval command: `pixi run ns-eval --load-config /home/kasm-user/Desktop/nerfstudio_outputs/TVA_NYX650_2026_06_04_gluemap_aba_mcmc_20k/splatfacto/20260615T055229Z/config.yml --output-path /home/kasm-user/Desktop/nerfstudio_task_logs/ns_eval_splatfacto_mcmc_20k_cuda128_20260615T055229Z.json`.
+- Eval log: `/home/kasm-user/Desktop/nerfstudio_task_logs/ns_eval_splatfacto_mcmc_20k_cuda128_20260615T055229Z.log`.
+- `pixi run python -m json.tool /home/kasm-user/Desktop/nerfstudio_task_logs/ns_eval_splatfacto_mcmc_20k_cuda128_20260615T055229Z.json` confirmed the saved metrics.
+
+### Decisions
+- Do not commit the model checkpoint, outputs, or raw logs; they are large runtime artifacts and are referenced from the tracked worklog.
+- Commit and push this worklog update on the existing Blackwell-specific branch after the 20k training and eval evidence are recorded.
