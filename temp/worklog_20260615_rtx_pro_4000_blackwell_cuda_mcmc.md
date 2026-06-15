@@ -68,3 +68,96 @@ recorded_at: Mon Jun 15 03:43:03 UTC 2026
 ### Decisions
 - Continue reconstruction with `splatfacto --pipeline.model.strategy mcmc`, because this path imports and its CLI works without tiny-cuda-nn.
 - Leave pixi manifest/lock uncommitted for now; the working environment is a pip overlay on top of pixi, and a cleaner manifest-level CUDA 12.8 conversion would be a separate dependency migration.
+
+## 2026-06-15 Resume Preflight And gsplat Blocker
+
+### Struggles
+- `gsplat` JIT compilation fails with the repo/pixi `nvcc` 11.8 when torch detects Blackwell `sm_120`; direct compile uses `compute_120` and fails because CUDA 11.8 does not know that architecture.
+- `TORCH_CUDA_ARCH_LIST=9.0+PTX` avoids the unsupported `compute_120` flag, but CUDA 11.8 `nvcc` segfaulted while compiling `fully_fused_projection_packed_2dgs_fwd.cu`.
+- A trial `pip install --force-reinstall gsplat==1.5.3` pulled torch `2.12.0+cu130`, numpy `2.2.6`, rich `15.0.0`, and CUDA 13 runtime packages, creating dependency conflicts with nerfstudio, pyarrow, torchvision, and viser.
+
+### Findings
+- Resume preflight at `Mon Jun 15 04:01:53 UTC 2026`: repo `/home/kasm-user/Desktop/nerfstudio`, branch `work/rtx-pro-4000-blackwell-driver-cuda-13-0-nvcc-11-8-mcmc-recon`, dataset path exists.
+- GPU still idle and available: `NVIDIA RTX PRO 4000 Blackwell`, driver CUDA `13.0`, 24467 MiB VRAM.
+- No training process is running after smoke failures.
+- After the `gsplat==1.5.3` trial, `pip check` reports conflicts: `pyarrow` requires numpy `<2`, and `torchvision 0.23.0+cu128` requires torch `2.8.0`.
+
+### Tips
+- Do not install `gsplat==1.5.3` without constraining dependencies; it tries to upgrade torch and CUDA runtime outside the current nerfstudio compatibility envelope.
+- For this repo revision, `gsplat==1.4.0` is the declared dependency. The key blocker is not Python API import but CUDA extension compilation with a Blackwell-capable compiler.
+
+### Commands / evidence
+- `TORCH_CUDA_ARCH_LIST=9.0+PTX ... ns-train splatfacto ...` failed with CUDA 11.8 `nvcc` segfault while compiling a gsplat CUDA source. Log: `/home/kasm-user/Desktop/nerfstudio_task_logs/ns_train_smoke_splatfacto_mcmc_sm90ptx_fg_20260615T0402Z.log`.
+- `pip install --upgrade --force-reinstall gsplat==1.5.3` completed but broke dependency consistency. Log: `/home/kasm-user/Desktop/nerfstudio_task_logs/pip_install_gsplat_153_20260615T0405Z.log`.
+
+### Decisions
+- Revert the Python environment to the known torch `2.8.0+cu128`, numpy `1.26.4`, pillow `10.3.0`, rich `<15`, and repo-pinned `gsplat==1.4.0` baseline before further training attempts.
+- Next viable fix should provide a CUDA 12.8+ `nvcc` for gsplat JIT, or use a constrained prebuilt gsplat wheel that matches torch/cu128 and does not alter unrelated dependencies.
+
+## 2026-06-15 Direct Pixi Build Verification
+
+recorded_at: 2026-06-15 04:17:16 UTC
+
+### Struggles
+- The prior worker had a functional `pixi run` Python overlay, but `pixi.toml` still declared conda torch 2.2/CUDA 11.8 dependencies.
+- `ns-train splatfacto --help` works, but smoke training reaches `gsplat` JIT and then requires a Blackwell-capable CUDA compiler.
+- The installed PyPI `nvidia-cuda-nvcc-cu12` package provides CUDA 12.8 headers/PTX tools, but the `nvcc` on `PATH` is still the pixi conda CUDA 11.8 compiler.
+
+### Findings
+- Active branch: `work/rtx-pro-4000-blackwell-driver-cuda-13-0-nvcc-11-8-mcmc-recon`.
+- Current runtime check passes: `torch 2.8.0+cu128`, torch CUDA `12.8`, CUDA available true, device `NVIDIA RTX PRO 4000 Blackwell`, capability `(12, 0)`, CUDA matmul OK.
+- `pixi run python -m pip check` reports no broken requirements.
+- `pixi run ns-train splatfacto --help` succeeds.
+- No related `pixi`, `ns-train`, `nvcc`, or `cudafe` processes were running after closing the subagent.
+
+### Tips
+- Keep the conda CUDA compiler version aligned with the PyTorch CUDA runtime before retrying `gsplat` JIT.
+- Avoid unconstrained `gsplat` upgrades; `gsplat==1.5.3` previously pulled torch/CUDA packages outside the repo compatibility envelope.
+
+### Commands / evidence
+- `pixi info` showed pixi `0.70.2`, virtual CUDA `13.0`, and the repo default environment at `.pixi/envs/default`.
+- `pixi run python - <<'PY' ...` verified torch/cu128, nerfstudio import, gsplat `1.4.0` import, and tinycudann absence.
+- `pixi run python -m pip check` -> no broken requirements.
+- `pixi run ns-train splatfacto --help` -> generated a 543-line help page successfully.
+- `pixi run nvcc --version` -> CUDA compilation tools `11.8`, which is too old for `sm_120`.
+
+### Decisions
+- Convert pixi metadata toward the actual working Blackwell stack: PyPI torch/torchvision cu128 plus conda CUDA 12.8 compiler/runtime packages.
+- Treat tiny-cuda-nn as optional for this splatfacto/MCMC path because `tinycudann` is not required for the selected method and cannot be rebuilt until the compiler mismatch is resolved.
+
+## 2026-06-15 Pixi CUDA 12.8 Build Completed
+
+recorded_at: 2026-06-15T05:40:02Z
+
+### Struggles
+- Moving torch/torchvision into the pixi manifest fixed the pip-overlay drift, but `pixi run post-install` initially failed because newer setuptools removed the `pkg_resources` import path used by the current repo.
+- Rebuilding `tinycudann` against torch `2.8.0+cu128` exposed missing CUDA development headers in the conda environment: first `nvrtc.h`/`cusparse.h`, then `cusolverDn.h`.
+- `gsplat==1.4.0` JIT for Blackwell `sm_120` failed under the default PyTorch extension parallelism with `ninja -j10` / `nvcc` exit 139.
+- After CUDA `.cu` objects compiled, `gsplat` failed on `ext.cpp` because PyTorch's JIT compile command ignored conda `CXXFLAGS` and could not find `cuda_runtime_api.h`.
+
+### Findings
+- `pixi.toml` now encodes the Blackwell-compatible stack directly: CUDA 12.8 conda compiler/dev packages plus PyPI `torch==2.8.0+cu128` and `torchvision==0.23.0+cu128`.
+- `setuptools==69.5.1`, `numpy==1.26.4`, `pillow==10.3.0`, and `rich==13.7.1` are pinned to avoid known breakages in this repo revision.
+- `scripts/pixi-cuda-env.sh` adds the CUDA target include directory to `CPATH`, sets `TORCH_CUDA_ARCH_LIST=12.0+PTX`, sets `TCNN_CUDA_ARCHITECTURES=120`, and defaults `MAX_JOBS=1`.
+- With `MAX_JOBS=1`, `gsplat_cuda.so` built successfully for `compute_120` + `sm_120`.
+- Final import checks pass: torch `2.8.0+cu128`, torch runtime CUDA `12.8`, GPU capability `(12, 0)`, `gsplat 1.4.0` backend loaded, `tinycudann` import OK.
+- Final 2-iteration `splatfacto` MCMC smoke completed successfully on `/home/kasm-user/Desktop/nerfstudio_processed/TVA_NYX650_2026_06_04_gluemap_aba_straight`.
+
+### Tips
+- Keep `MAX_JOBS=1` for PyTorch CUDA extension builds on this machine unless a newer compiler/gsplat combination is proven stable; it avoids the observed `nvcc` exit 139.
+- `CPATH` is required because PyTorch's generated `build.ninja` does not include conda CUDA target headers for pure C++ extension sources.
+- Use `12.0+PTX` rather than plain `12.0` for `TORCH_CUDA_ARCH_LIST` so PyTorch emits both PTX and native Blackwell code.
+- Do not remove `scripts/pixi-cuda-env.sh` unless `pixi run python -c "import gsplat.cuda._backend"` and `ns-train splatfacto` are retested from a clean extension cache.
+
+### Commands / evidence
+- `pixi install` completed after manifest conversion to CUDA 12.8 / torch cu128.
+- `pixi run post-install` succeeded after header and setuptools fixes. Final log: `/home/kasm-user/Desktop/nerfstudio_task_logs/pixi_post_install_final_20260615T043918Z.log`.
+- `pixi run python -m pip check` -> no broken requirements.
+- `pixi run nvcc --version` -> CUDA compilation tools `12.8`, V12.8.61.
+- `pixi run python` import check loaded torch/cu128, `gsplat.cuda._backend`, and `tinycudann`.
+- `pixi run --manifest-path /home/kasm-user/Desktop/nerfstudio/pixi.toml ninja -v -j 1` completed `gsplat_cuda.so`. Log: `/home/kasm-user/Desktop/nerfstudio_task_logs/gsplat_cuda_full_j1_cpath_20260615T052731Z.log`.
+- `pixi run ns-train splatfacto --pipeline.model.strategy mcmc --max-num-iterations 2 ...` completed successfully. Log: `/home/kasm-user/Desktop/nerfstudio_task_logs/ns_train_smoke_splatfacto_mcmc_cuda128_20260615T053929Z.log`.
+
+### Decisions
+- Keep `gsplat==1.4.0` as declared by the repo instead of upgrading to an unconstrained newer package that changes torch/CUDA/numpy dependency surfaces.
+- Commit the pixi manifest, lockfile, activation script, and worklog together as the reproducible pixi build fix for this GPU/CUDA branch.
